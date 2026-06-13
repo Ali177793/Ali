@@ -18,7 +18,7 @@ conn.commit()
 KEYWORDS = {
     'كيك وحلويات': ['كيك', 'كعك', 'حلويات', 'بقلاوة', 'معمول', 'كاتو', 'دونات'],
     'البان واجبان': ['لبن', 'جبن', 'جبنة', 'حليب', 'زبادي', 'قشطة', 'قيمر', 'اجبان'],
-    'مشروبات': ['ببسي', 'كولا', 'عصير', 'مي', 'ماء', 'سفن', 'ميرندا', 'طاقة'],
+    'مشروبات': ['ببسي', 'كولا', 'عصير', 'مي', 'ماء', 'سفن', 'ميرندا', 'طاقة', 'ريدبول'],
     'معلبات': ['تونة', 'فاصوليا', 'حمص', 'فول', 'معلب', 'صلصة', 'مربى', 'شيبس'],
     'منظفات': ['تايت', 'زاهي', 'قاصر', 'شامبو', 'صابون', 'منظف', 'فيري', 'كلوركس'],
     'بهارات': ['فلفل', 'كمون', 'كركم', 'بهار', 'ملح', 'دارسين', 'بابريكا'],
@@ -46,13 +46,10 @@ def save(message):
     if not price: return bot.send_message(ADMIN_ID, '❌ ما لكيت سعر. اكتب رقم')
 
     photo = message.photo[-1].file_id
-    cur.execute("SELECT COUNT(*) FROM products WHERE category=?", (category,))
-    count = cur.fetchone()[0] + 1
-    name = f"{category} {count}"
-
-    cur.execute('INSERT INTO products (category, name, price, photo) VALUES (?,?,?,?)', (category, name, price, photo))
+    cur.execute("INSERT INTO products (category, name, price, photo) VALUES (?,?,?,?)",
+                (category, '', price, photo))
     conn.commit()
-    bot.send_message(ADMIN_ID, f'✅ حفظت: {name}\n💰 {price} د.ع\n📦 القسم: {category}')
+    bot.send_message(ADMIN_ID, f'✅ تم حفظ منتج جديد\n📦 القسم: {category}\n💰 {price} د.ع')
 
 def main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -75,60 +72,48 @@ def buttons(call):
     is_admin = user_id == ADMIN_ID
 
     if call.data == 'back_to_menu':
+        bot.delete_message(call.message.chat.id, call.message.message_id)
         markup = main_menu()
-        bot.edit_message_text('*اختر القسم 👇*', call.message.chat.id, call.message.message_id,
-                              reply_markup=markup, parse_mode='Markdown')
+        bot.send_message(call.message.chat.id, '*اختر القسم 👇*', reply_markup=markup, parse_mode='Markdown')
         return bot.answer_callback_query(call.id)
 
     if call.data.startswith('cat_'):
         cat = call.data[4:]
-        cur.execute("SELECT id, name, price, photo FROM products WHERE category=? ORDER BY id DESC", (cat,))
+        cur.execute("SELECT id, price, photo FROM products WHERE category=? ORDER BY id DESC", (cat,))
         items = cur.fetchall()
         if not items:
             bot.answer_callback_query(call.id, 'ماكو منتجات')
             return
 
-        text = f'*قسم {cat}*\n\nاختر منتج للطلب:'
-        markup = types.InlineKeyboardMarkup()
-        for pid, name, price, photo in items:
-            markup.add(types.InlineKeyboardButton(f'{name} - {price} د.ع', callback_data=f'view_{pid}'))
-        markup.add(types.InlineKeyboardButton('⬅️ رجوع للأقسام', callback_data='back_to_menu'))
-
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                              reply_markup=markup, parse_mode='Markdown')
         bot.answer_callback_query(call.id)
+        bot.delete_message(call.message.chat.id, call.message.message_id)
 
-    elif call.data.startswith('view_'):
-        pid = call.data.split('_')[1]
-        cur.execute("SELECT name, price, photo, category FROM products WHERE id=?", (pid,))
-        result = cur.fetchone()
-        if not result:
-            bot.answer_callback_query(call.id, 'المنتج انحذف')
-            return
+        # نرسل كل المنتجات صور وجواها السعر فقط
+        for pid, price, photo in items:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton('🛒 اطلب الان', callback_data=f'order_{pid}'))
+            if is_admin:
+                markup.add(types.InlineKeyboardButton('🗑️ حذف', callback_data=f'del_{pid}'))
+            bot.send_photo(call.message.chat.id, photo, caption=f'💰 *السعر: {price} د.ع*',
+                           reply_markup=markup, parse_mode='Markdown')
 
-        name, price, photo, category = result
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton('🛒 اطلب الان', callback_data=f'order_{pid}'))
-        markup.add(types.InlineKeyboardButton(f'⬅️ رجوع لـ {category}', callback_data=f'cat_{category}'))
-        if is_admin:
-            markup.add(types.InlineKeyboardButton('🗑️ حذف', callback_data=f'del_{pid}'))
-
-        bot.send_photo(call.message.chat.id, photo, caption=f'*{name}*\n💰 *السعر: {price} د.ع*',
-                       reply_markup=markup, parse_mode='Markdown')
-        bot.answer_callback_query(call.id)
+        # اخر شي زر الرجوع
+        back_markup = types.InlineKeyboardMarkup()
+        back_markup.add(types.InlineKeyboardButton('⬅️ رجوع للأقسام', callback_data='back_to_menu'))
+        bot.send_message(call.message.chat.id, 'اختر منتج او ارجع للأقسام', reply_markup=back_markup)
 
     elif call.data.startswith('order_'):
         pid = call.data.split('_')[1]
-        cur.execute("SELECT name, price FROM products WHERE id=?", (pid,))
+        cur.execute("SELECT price FROM products WHERE id=?", (pid,))
         result = cur.fetchone()
         if not result:
             bot.answer_callback_query(call.id, 'المنتج انحذف')
             return
 
-        name, price = result
+        price = result[0]
         user = call.from_user
         username = f'@{user.username}' if user.username else user.first_name
-        bot.send_message(ADMIN_ID, f'طلب جديد 🔥\n📦 {name}\n💰 {price} د.ع\n👤 {username}\n🆔 {user.id}')
+        bot.send_message(ADMIN_ID, f'طلب جديد 🔥\n💰 {price} د.ع\n👤 {username}\n🆔 {user.id}')
         bot.answer_callback_query(call.id, 'تم ارسال طلبك! ✅')
 
     elif call.data.startswith('del_'):
@@ -137,13 +122,6 @@ def buttons(call):
             return
 
         pid = call.data.split('_')[1]
-        cur.execute("SELECT category FROM products WHERE id=?", (pid,))
-        result = cur.fetchone()
-        if not result:
-            bot.answer_callback_query(call.id, 'المنتج انحذف مسبقا')
-            return
-
-        cat = result[0]
         cur.execute("DELETE FROM products WHERE id=?", (pid,))
         conn.commit()
         bot.answer_callback_query(call.id, 'تم الحذف')

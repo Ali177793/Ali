@@ -6,7 +6,8 @@ import os
 
 BOT_TOKEN = os.environ['BOT_TOKEN']
 CHANNEL_ID = int(os.environ['CHANNEL_ID'])
-ADMIN_ID = int(os.environ['ADMIN_ID'])
+# نحول النص لأرقام ونحذف الفراغات
+ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
 
 bot = telebot.TeleBot(BOT_TOKEN)
 conn = sqlite3.connect('db.db', check_same_thread=False)
@@ -22,7 +23,7 @@ KEYWORDS = {
     'معلبات': ['تونة', 'فاصوليا', 'حمص', 'فول', 'معلب', 'صلصة', 'مربى', 'شيبس'],
     'منظفات': ['تايت', 'زاهي', 'قاصر', 'شامبو', 'صابون', 'منظف', 'فيري', 'كلوركس'],
     'بهارات': ['فلفل', 'كمون', 'كركم', 'بهار', 'ملح', 'دارسين', 'بابريكا'],
-    'كوزمتك': ['مكياج', 'كريم', 'روج', 'كحل', 'مسكارة', 'فاونديشن', 'بودرة', 'عطر', 'لوشن', 'بلسم', 'مناكير']
+    'كوزمتك': ['مكياج', 'كريم', 'روج', 'كحل', 'مسكارة', 'فاونديشن', 'بودرة', 'عطر', 'لوشن', 'بلسم', 'مناكير', 'اظافر', 'رموش']
 }
 
 def detect_category(text):
@@ -43,13 +44,16 @@ def save(message):
     text = message.caption or ""
     category = detect_category(text)
     price = get_price(text)
-    if not price: return bot.send_message(ADMIN_ID, '❌ ما لكيت سعر. اكتب رقم')
+    if not price: 
+        for admin in ADMIN_IDS: bot.send_message(admin, '❌ ما لكيت سعر. اكتب رقم')
+        return
 
     photo = message.photo[-1].file_id
     cur.execute("INSERT INTO products (category, name, price, photo) VALUES (?,?,?,?)",
                 (category, '', price, photo))
     conn.commit()
-    bot.send_message(ADMIN_ID, f'✅ تم حفظ منتج جديد\n📦 القسم: {category}\n💰 {price} د.ع')
+    for admin in ADMIN_IDS: 
+        bot.send_message(admin, f'✅ تم حفظ منتج جديد\n📦 القسم: {category}\n💰 {price} د.ع')
 
 def main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -69,7 +73,7 @@ def start(message):
 @bot.callback_query_handler(func=lambda call: True)
 def buttons(call):
     user_id = call.from_user.id
-    is_admin = user_id == ADMIN_ID
+    is_admin = user_id in ADMIN_IDS
 
     if call.data == 'back_to_menu':
         bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -88,7 +92,6 @@ def buttons(call):
         bot.answer_callback_query(call.id)
         bot.delete_message(call.message.chat.id, call.message.message_id)
 
-        # نرسل كل المنتجات صور وجواها السعر فقط
         for pid, price, photo in items:
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton('🛒 اطلب الان', callback_data=f'order_{pid}'))
@@ -97,7 +100,6 @@ def buttons(call):
             bot.send_photo(call.message.chat.id, photo, caption=f'💰 *السعر: {price} د.ع*',
                            reply_markup=markup, parse_mode='Markdown')
 
-        # اخر شي زر الرجوع
         back_markup = types.InlineKeyboardMarkup()
         back_markup.add(types.InlineKeyboardButton('⬅️ رجوع للأقسام', callback_data='back_to_menu'))
         bot.send_message(call.message.chat.id, 'اختر منتج او ارجع للأقسام', reply_markup=back_markup)
@@ -113,7 +115,9 @@ def buttons(call):
         price = result[0]
         user = call.from_user
         username = f'@{user.username}' if user.username else user.first_name
-        bot.send_message(ADMIN_ID, f'طلب جديد 🔥\n💰 {price} د.ع\n👤 {username}\n🆔 {user.id}')
+        # الطلب يروح لكل المدراء
+        for admin in ADMIN_IDS:
+            bot.send_message(admin, f'طلب جديد 🔥\n💰 {price} د.ع\n👤 {username}\n🆔 {user.id}')
         bot.answer_callback_query(call.id, 'تم ارسال طلبك! ✅')
 
     elif call.data.startswith('del_'):

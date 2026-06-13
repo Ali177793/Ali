@@ -4,7 +4,6 @@ import sqlite3
 import re
 import os
 
-# 1. ياخذ المتغيرات من Railway - لا تغير شي هنا
 BOT_TOKEN = os.environ['BOT_TOKEN']
 CHANNEL_ID = int(os.environ['CHANNEL_ID'])
 ADMIN_ID = int(os.environ['ADMIN_ID'])
@@ -16,7 +15,6 @@ cur.execute('''CREATE TABLE IF NOT EXISTS products
                (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, name TEXT, price TEXT, photo TEXT)''')
 conn.commit()
 
-# 2. قاموس الكلمات - تكدر تضيف كلمات براحتك
 KEYWORDS = {
     'كيك وحلويات': ['كيك', 'كعك', 'حلويات', 'بقلاوة', 'معمول', 'كاتو', 'دونات'],
     'البان واجبان': ['لبن', 'جبن', 'جبنة', 'حليب', 'زبادي', 'قشطة', 'قيمر', 'اجبان'],
@@ -39,7 +37,6 @@ def get_price(text):
     match = re.search(r'(\d[\d,]*)', text.replace(' ', ''))
     return match.group(1).replace(',', '') if match else None
 
-# 3. حفظ من القناة
 @bot.channel_post_handler(content_types=['photo'])
 def save(message):
     if message.chat.id!= CHANNEL_ID: return
@@ -57,43 +54,67 @@ def save(message):
     conn.commit()
     bot.send_message(ADMIN_ID, f'✅ حفظت: {name}\n💰 {price} د.ع\n📦 القسم: {category}')
 
-# 4. /start = عرض الأقسام
-@bot.message_handler(commands=['start'])
-def start(message):
+def main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
     cur.execute('SELECT DISTINCT category FROM products ORDER BY id DESC')
     cats = [row[0] for row in cur.fetchall()]
-
-    if not cats: return bot.send_message(message.chat.id, 'أهلا بيك 👋\nالمنتجات قيد الإضافة')
-
     for cat in cats:
         markup.add(types.InlineKeyboardButton(cat, callback_data=f'cat_{cat}'))
+    return markup
 
+@bot.message_handler(commands=['start'])
+def start(message):
+    markup = main_menu()
+    if not markup.keyboard:
+        return bot.send_message(message.chat.id, 'أهلا بيك 👋\nالمنتجات قيد الإضافة')
     bot.send_message(message.chat.id, '*اختر القسم 👇*', reply_markup=markup, parse_mode='Markdown')
 
-# 5. الأزرار: عرض + طلب + حذف للأدمن
 @bot.callback_query_handler(func=lambda call: True)
 def buttons(call):
     user_id = call.from_user.id
     is_admin = user_id == ADMIN_ID
 
+    # زر الرجوع للأقسام
+    if call.data == 'back_to_menu':
+        markup = main_menu()
+        bot.edit_message_text('*اختر القسم 👇*', call.message.chat.id, call.message.message_id,
+                              reply_markup=markup, parse_mode='Markdown')
+        return bot.answer_callback_query(call.id)
+
+    # عرض منتجات القسم
     if call.data.startswith('cat_'):
         cat = call.data[4:]
         cur.execute("SELECT id, name, price, photo FROM products WHERE category=? ORDER BY id DESC", (cat,))
         items = cur.fetchall()
-
         if not items: return bot.answer_callback_query(call.id, 'ماكو منتجات')
 
-        bot.edit_message_text(f'*قسم {cat}*', call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+        # نحول الرسالة لقائمة المنتجات + زر رجوع
+        text = f'*قسم {cat}*\n\nاختر منتج للطلب:'
+        markup = types.InlineKeyboardMarkup()
 
         for pid, name, price, photo in items:
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton('🛒 اطلب الان', callback_data=f'order_{pid}'))
-            if is_admin:
-                markup.add(types.InlineKeyboardButton('🗑️ حذف', callback_data=f'del_{pid}'))
+            markup.add(types.InlineKeyboardButton(f'{name} - {price} د.ع', callback_data=f'view_{pid}'))
 
-            bot.send_photo(call.message.chat.id, photo, caption=f'💰 *السعر: {price} د.ع*',
-                           reply_markup=markup, parse_mode='Markdown')
+        markup.add(types.InlineKeyboardButton('⬅️ رجوع للأقسام', callback_data='back_to_menu'))
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                              reply_markup=markup, parse_mode='Markdown')
+        bot.answer_callback_query(call.id)
+
+    # عرض تفاصيل المنتج
+    elif call.data.startswith('view_'):
+        pid = call.data.split('_')[1]
+        cur.execute("SELECT name, price, photo, category FROM products WHERE id=?", (pid,))
+        name, price, photo, category = cur.fetchone()
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton('🛒 اطلب الان', callback_data=f'order_{pid}'))
+        markup.add(types.InlineKeyboardButton(f'⬅️ رجوع لـ {category}', callback_data=f'cat_{category}'))
+        if is_admin:
+            markup.add(types.InlineKeyboardButton('🗑️ حذف', callback_data=f'del_{pid}'))
+
+        bot.send_photo(call.message.chat.id, photo, caption=f'*{name}*\n💰 *السعر: {price} د.ع*',
+                       reply_markup=markup, parse_mode='Markdown')
+        bot.answer_callback_query(call.id)
 
     elif call.data.startswith('order_'):
         pid = call.data.split('_')[1]
@@ -102,15 +123,7 @@ def buttons(call):
         user = call.from_user
         username = f'@{user.username}' if user.username else user.first_name
         bot.send_message(ADMIN_ID, f'طلب جديد 🔥\n📦 {name}\n💰 {price} د.ع\n👤 {username}\n🆔 {user.id}')
-        bot.answer_callback_query(call.id, 'تم ارسال طلبك!')
+        bot.answer_callback_query(call.id, 'تم ارسال طلبك! ✅')
 
     elif call.data.startswith('del_'):
-        if not is_admin: return bot.answer_callback_query(call.id, 'ما عندك صلاحية')
-        pid = call.data.split('_')[1]
-        cur.execute("DELETE FROM products WHERE id=?", (pid,))
-        conn.commit()
-        bot.answer_callback_query(call.id, 'تم الحذف')
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-
-print("البوت شغال...")
-bot.infinity_polling()
+        if

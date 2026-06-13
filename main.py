@@ -74,38 +74,39 @@ def buttons(call):
     user_id = call.from_user.id
     is_admin = user_id == ADMIN_ID
 
-    # زر الرجوع للأقسام
     if call.data == 'back_to_menu':
         markup = main_menu()
         bot.edit_message_text('*اختر القسم 👇*', call.message.chat.id, call.message.message_id,
                               reply_markup=markup, parse_mode='Markdown')
         return bot.answer_callback_query(call.id)
 
-    # عرض منتجات القسم
     if call.data.startswith('cat_'):
         cat = call.data[4:]
         cur.execute("SELECT id, name, price, photo FROM products WHERE category=? ORDER BY id DESC", (cat,))
         items = cur.fetchall()
-        if not items: return bot.answer_callback_query(call.id, 'ماكو منتجات')
+        if not items:
+            bot.answer_callback_query(call.id, 'ماكو منتجات')
+            return
 
-        # نحول الرسالة لقائمة المنتجات + زر رجوع
         text = f'*قسم {cat}*\n\nاختر منتج للطلب:'
         markup = types.InlineKeyboardMarkup()
-
         for pid, name, price, photo in items:
             markup.add(types.InlineKeyboardButton(f'{name} - {price} د.ع', callback_data=f'view_{pid}'))
-
         markup.add(types.InlineKeyboardButton('⬅️ رجوع للأقسام', callback_data='back_to_menu'))
+
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
                               reply_markup=markup, parse_mode='Markdown')
         bot.answer_callback_query(call.id)
 
-    # عرض تفاصيل المنتج
     elif call.data.startswith('view_'):
         pid = call.data.split('_')[1]
         cur.execute("SELECT name, price, photo, category FROM products WHERE id=?", (pid,))
-        name, price, photo, category = cur.fetchone()
+        result = cur.fetchone()
+        if not result:
+            bot.answer_callback_query(call.id, 'المنتج انحذف')
+            return
 
+        name, price, photo, category = result
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton('🛒 اطلب الان', callback_data=f'order_{pid}'))
         markup.add(types.InlineKeyboardButton(f'⬅️ رجوع لـ {category}', callback_data=f'cat_{category}'))
@@ -119,11 +120,34 @@ def buttons(call):
     elif call.data.startswith('order_'):
         pid = call.data.split('_')[1]
         cur.execute("SELECT name, price FROM products WHERE id=?", (pid,))
-        name, price = cur.fetchone()
+        result = cur.fetchone()
+        if not result:
+            bot.answer_callback_query(call.id, 'المنتج انحذف')
+            return
+
+        name, price = result
         user = call.from_user
         username = f'@{user.username}' if user.username else user.first_name
         bot.send_message(ADMIN_ID, f'طلب جديد 🔥\n📦 {name}\n💰 {price} د.ع\n👤 {username}\n🆔 {user.id}')
         bot.answer_callback_query(call.id, 'تم ارسال طلبك! ✅')
 
     elif call.data.startswith('del_'):
-        if
+        if not is_admin:
+            bot.answer_callback_query(call.id, 'ما عندك صلاحية')
+            return
+
+        pid = call.data.split('_')[1]
+        cur.execute("SELECT category FROM products WHERE id=?", (pid,))
+        result = cur.fetchone()
+        if not result:
+            bot.answer_callback_query(call.id, 'المنتج انحذف مسبقا')
+            return
+
+        cat = result[0]
+        cur.execute("DELETE FROM products WHERE id=?", (pid,))
+        conn.commit()
+        bot.answer_callback_query(call.id, 'تم الحذف')
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+
+print("البوت شغال...")
+bot.infinity_polling()
